@@ -3,6 +3,7 @@ from machine import Pin, ADC, I2C
 from ulora import LoRa, ModemConfig, SPIConfig
 from bmp280 import BMP280
 from mpu6050 import MPU6050
+import math
 
 # ----------------------
 # LoRa Parameters
@@ -30,60 +31,58 @@ lora = LoRa(
 # ----------------------
 # Sensor Setup
 # ----------------------
+mq2 = ADC(Pin(27))  # MQ2 gas sensor (analog input)
 
-# MQ2 (gas sensor) on ADC1 (GP27)
-mq2 = ADC(Pin(27))
+i2c = I2C(0, scl=Pin(21), sda=Pin(20))  # I2C bus
 
-# I2C bus for BMP280 + MPU6050
-i2c = I2C(0, scl=Pin(21), sda=Pin(20))
+bmp = BMP280(i2c, addr=0x76)  # BMP280 sensor
+mpu = MPU6050(i2c, addr=0x68)  # MPU6050 sensor
 
-# BMP280 at 0x76 (try 0x77 if needed)
-bmp = BMP280(i2c, addr=0x76)
+# Sea-level reference pressure (for altitude calculation)
+SEA_LEVEL_PRESSURE = 1013.25
 
-# MPU6050 at 0x68
-mpu = MPU6050(i2c, addr=0x68)
+def pressure_to_altitude(pressure_hpa, sea_level=SEA_LEVEL_PRESSURE):
+    """Convert pressure (hPa) to altitude (m)."""
+    if pressure_hpa <= 0:
+        return -999
+    return 44330 * (1 - (pressure_hpa / sea_level) ** (1/5.255))
 
 # ----------------------
 # Main Loop
 # ----------------------
 while True:
-    # MQ2 analog value
     mq2_val = mq2.read_u16()
 
     # BMP280 readings
     try:
         temp = float(bmp.temperature)  # °C
-        press = float(bmp.pressure)
+        press = float(bmp.pressure)    # hPa
 
-        # Fix scaling if in Pa
-        if press > 2000:
+        if press > 2000:  # sometimes returns Pa
             press = press / 100
 
-        # Always positive
         press = abs(press)
-
-        # Clamp to realistic range
-        if press < 300 or press > 1100:
-            press = 1013.25  # default to standard sea-level pressure
+        if press < 300 or press > 1100:  # clamp to valid range
+            press = SEA_LEVEL_PRESSURE
 
     except:
         temp, press = -999, -999
 
+    # Calculate altitude
+    altitude = pressure_to_altitude(press)
+
     # MPU6050 readings
     accel = mpu.get_accel_data()
     gyro = mpu.get_gyro_data()
-    mpu_temp = mpu.get_temp()
 
-    # Format data into one message
+    # Format LoRa message
     msg = (
         f"GAS={mq2_val}, "
-        f"TEMPERATURE={temp:.2f}C, PRESSURE={press:.2f}hPa, "
-        f"INT_TEMP={mpu_temp:.2f}C, "
-        f"ACCELEROMETER=({accel['x']:.2f},{accel['y']:.2f},{accel['z']:.2f}), "
-        f"GYROSCOPE=({gyro['x']:.2f},{gyro['y']:.2f},{gyro['z']:.2f})"
+        f"TEMP={temp:.2f}C, PRESSURE={press:.2f}hPa, ALT={altitude:.2f}m, "
+        f"ACCEL=({accel['x']:.2f},{accel['y']:.2f},{accel['z']:.2f}), "
+        f"GYRO=({gyro['x']:.2f},{gyro['y']:.2f},{gyro['z']:.2f})"
     )
 
-    # Send via LoRa
     lora.send_to_wait(msg, SERVER_ADDRESS)
     print("Sent:", msg)
 
