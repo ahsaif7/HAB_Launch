@@ -11,7 +11,7 @@ RFM95_RST = 27
 RFM95_SPIBUS = SPIConfig.rp2_0
 RFM95_CS = 5
 RFM95_INT = 28
-RF95_FREQ = 915.0
+RF95_FREQ = 433
 RF95_POW = 20
 CLIENT_ADDRESS = 1
 SERVER_ADDRESS = 2
@@ -37,10 +37,10 @@ mq2 = ADC(Pin(27))
 # I2C bus for BMP280 + MPU6050
 i2c = I2C(0, scl=Pin(21), sda=Pin(20))
 
-# BMP280 at 0x76
+# BMP280 at 0x76 (try 0x77 if needed)
 bmp = BMP280(i2c, addr=0x76)
 
-# MPU6050 at 0x68 (change to 0x69 if AD0 pulled high)
+# MPU6050 at 0x68
 mpu = MPU6050(i2c, addr=0x68)
 
 # ----------------------
@@ -51,8 +51,23 @@ while True:
     mq2_val = mq2.read_u16()
 
     # BMP280 readings
-    temp = float(bmp.temperature)     # °C
-    press = float(bmp.pressure) / 100 # hPa
+    try:
+        temp = float(bmp.temperature)  # °C
+        press = float(bmp.pressure)
+
+        # Fix scaling if in Pa
+        if press > 2000:
+            press = press / 100
+
+        # Always positive
+        press = abs(press)
+
+        # Clamp to realistic range
+        if press < 300 or press > 1100:
+            press = 1013.25  # default to standard sea-level pressure
+
+    except:
+        temp, press = -999, -999
 
     # MPU6050 readings
     accel = mpu.get_accel_data()
@@ -61,11 +76,11 @@ while True:
 
     # Format data into one message
     msg = (
-        f"MQ2={mq2_val}, "
-        f"BMP_Temp={temp:.2f}C, BMP_Press={press:.2f}hPa, "
-        f"MPU_Temp={mpu_temp:.2f}C, "
-        f"Accel=({accel['x']:.2f},{accel['y']:.2f},{accel['z']:.2f}), "
-        f"Gyro=({gyro['x']:.2f},{gyro['y']:.2f},{gyro['z']:.2f})"
+        f"GAS={mq2_val}, "
+        f"TEMPERATURE={temp:.2f}C, PRESSURE={press:.2f}hPa, "
+        f"INT_TEMP={mpu_temp:.2f}C, "
+        f"ACCELEROMETER=({accel['x']:.2f},{accel['y']:.2f},{accel['z']:.2f}), "
+        f"GYROSCOPE=({gyro['x']:.2f},{gyro['y']:.2f},{gyro['z']:.2f})"
     )
 
     # Send via LoRa
